@@ -1,0 +1,5 @@
+ALTER TABLE "system_jobs" ADD COLUMN "draw_trigger_source" text;--> statement-breakpoint
+CREATE INDEX "campaign_participants_campaign_value_idx" ON "campaign_participants" USING btree ("campaign_id","total_face_value");--> statement-breakpoint
+CREATE INDEX "campaigns_scheduled_due_idx" ON "campaigns" USING btree ("draw_at") WHERE "campaigns"."status" = 'ACTIVE' and "campaigns"."draw_trigger" = 'SCHEDULED';--> statement-breakpoint
+CREATE INDEX "winners_campaign_email_idx" ON "winners" USING btree ("campaign_id","canonical_email_snapshot");--> statement-breakpoint
+ALTER TABLE "system_jobs" ADD CONSTRAINT "system_jobs_draw_source_check" CHECK (("system_jobs"."type" = 'DRAW_CAMPAIGN' and "system_jobs"."draw_trigger_source" in ('AUTO_TARGET', 'AUTO_SCHEDULE', 'ADMIN_MANUAL', 'ADMIN_RETRY')) or ("system_jobs"."type" = 'CLEANUP_CAMPAIGN_CODES' and "system_jobs"."draw_trigger_source" is null));

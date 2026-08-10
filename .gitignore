@@ -1,0 +1,35 @@
+# dependencies
+/node_modules/
+
+# Next.js
+/.next/
+/out/
+
+# build output
+/dist-worker/
+/coverage/
+
+# local environment and secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+/logs/*
+!/logs/.gitkeep
+!/logs/README.md
+/.bylucky-runtime/
+
+# editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# TypeScript
+*.tsbuildinfo

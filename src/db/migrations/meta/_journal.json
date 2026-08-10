@@ -1,0 +1,34 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1786341319394,
+      "tag": "0000_organic_virginia_dare",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786345296482,
+      "tag": "0001_core_lottery_operations",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786345757691,
+      "tag": "0002_prize_raw_content",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786360000000,
+      "tag": "0003_winners_canonical_email_unique",
+      "breakpoints": true
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "name": "bylucky",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/run-with-log.mjs development web -- node node_modules/next/dist/bin/next dev",
+    "build": "next build",
+    "start": "next start",
+    "worker:dev": "node scripts/run-with-log.mjs development worker -- node --conditions=react-server --import tsx src/worker/index.ts",
+    "worker:build": "esbuild src/worker/index.ts --bundle --platform=node --format=cjs --external:server-only --outfile=dist-worker/index.cjs",
+    "worker:start": "node --conditions=react-server dist-worker/index.cjs",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:seed": "tsx scripts/seed-defaults.ts",
+    "db:studio": "drizzle-kit studio",
+    "admin:hash-password": "tsx scripts/hash-admin-password.ts",
+    "secrets:generate": "tsx scripts/generate-secrets.ts",
+    "smoke:auth": "node scripts/smoke-auth.mjs",
+    "env:check": "powershell -ExecutionPolicy Bypass -File scripts/check-windows-dev.ps1",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run lint && npm run typecheck && npm run test && npm run build && npm run worker:build"
+  },
+  "engines": {
+    "node": ">=22.0.0 <23",
+    "npm": ">=10"
+  },
+  "dependencies": {
+    "@material-symbols/font-400": "^0.33.0",
+    "@types/nodemailer": "^8.0.1",
+    "drizzle-orm": "0.45.2",
+    "lucide-react": "1.31.0",
+    "next": "16.3.0",
+    "nodemailer": "^9.0.5",
+    "postgres": "3.4.9",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "server-only": "^0.0.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/node": "26.2.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "@vitest/coverage-v8": "4.1.10",
+    "dotenv": "17.4.2",
+    "drizzle-kit": "0.31.10",
+    "esbuild": "0.28.2",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.0",
+    "tailwindcss": "4.3.3",
+    "tsx": "4.23.12",
+    "typescript": "6.0.2",
+    "vitest": "4.1.10"
+  }
+}

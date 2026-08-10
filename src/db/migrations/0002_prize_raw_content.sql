@@ -1,0 +1,1 @@
+ALTER TABLE "prize_tiers" ADD COLUMN "raw_content_ciphertext" text;

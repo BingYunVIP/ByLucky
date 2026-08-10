@@ -1,0 +1,179 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f4f7f9;
+  --surface: #ffffff;
+  --surface-subtle: #fbfcfd;
+  --surface-muted: #eef3f5;
+  --ice: #eaf5fa;
+  --text-primary: #17242d;
+  --text-secondary: #5e6f79;
+  --text-muted: #83929a;
+  --border: #dce5e9;
+  --border-subtle: #e9eef0;
+  --border-strong: #c8d5db;
+  --brand: #c73932;
+  --brand-hover: #a92d28;
+  --success: #24734d;
+  --warning: #946017;
+  --danger: #b6312a;
+  --info: #28617f;
+  --shadow-card: 0 1px 2px rgba(24, 42, 51, 0.035), 0 6px 18px rgba(24, 42, 51, 0.035);
+  --toast-success-bg: #effaf3;
+  --toast-success-border: #c9e5d5;
+  --toast-error-bg: #fff2f1;
+  --toast-error-border: #efcbc8;
+  --toast-info-bg: #edf6fb;
+  --toast-info-border: #cfe2f1;
+  --toast-warning-bg: #fff8e8;
+  --toast-warning-border: #f0ddba;
+  --badge-info-bg: #edf6fb;
+  --badge-info-border: #cfe2f1;
+  --badge-success-bg: #effaf3;
+  --badge-success-border: #c9e5d5;
+  --badge-warning-bg: #fff8e8;
+  --badge-warning-border: #f0ddba;
+  --badge-danger-bg: #fff2f1;
+  --badge-danger-border: #efcbc8;
+  --badge-brand-bg: #fff3f2;
+  --badge-brand-border: #efcecb;
+}
+
+html[data-public-theme="dark"] {
+  color-scheme: dark;
+  --background: #0d1821;
+  --surface: #152631;
+  --surface-subtle: #192d38;
+  --surface-muted: #203641;
+  --ice: #1c3a49;
+  --text-primary: #eff6f8;
+  --text-secondary: #b2c2ca;
+  --text-muted: #829aa5;
+  --border: #2d4753;
+  --border-subtle: #263f4b;
+  --border-strong: #45606c;
+  --brand: #de5c55;
+  --brand-hover: #ef736b;
+  --success: #69c895;
+  --warning: #e7b25d;
+  --danger: #f27b74;
+  --info: #8fcbe2;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2), 0 12px 28px rgba(0, 0, 0, 0.2);
+  --toast-success-bg: #173729;
+  --toast-success-border: #2e7050;
+  --toast-error-bg: #452526;
+  --toast-error-border: #804342;
+  --toast-info-bg: #183846;
+  --toast-info-border: #336577;
+  --toast-warning-bg: #44371e;
+  --toast-warning-border: #7b6636;
+  --badge-info-bg: #183846;
+  --badge-info-border: #336577;
+  --badge-success-bg: #173729;
+  --badge-success-border: #2e7050;
+  --badge-warning-bg: #44371e;
+  --badge-warning-border: #7b6636;
+  --badge-danger-bg: #452526;
+  --badge-danger-border: #804342;
+  --badge-brand-bg: #47282a;
+  --badge-brand-border: #824648;
+}
+
+* {
+  box-sizing: border-box;
+  letter-spacing: 0;
+}
+
+html {
+  background: var(--background);
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background: var(--background);
+  color: var(--text-primary);
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", Inter, "Segoe UI", system-ui,
+    -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+  outline: 3px solid rgba(199, 57, 50, 0.22);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: rgba(199, 57, 50, 0.16);
+}
+
+html {
+  scroll-padding-top: 84px;
+}
+
+.switch-input {
+  appearance: none;
+  position: relative;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 24px;
+  margin: 0;
+  border: 1px solid #c8d5db;
+  border-radius: 999px;
+  background: #dbe4e8;
+  cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+
+.switch-input::after {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: white;
+  box-shadow: 0 1px 2px rgba(24, 42, 51, 0.18);
+  content: "";
+  transition: transform 150ms ease;
+}
+
+.switch-input:checked {
+  border-color: var(--brand);
+  background: var(--brand);
+}
+
+.switch-input:checked::after {
+  transform: translateX(18px);
+}
+
+.switch-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.skeleton {
+  background: linear-gradient(100deg, #edf2f4 30%, #f8fafb 50%, #edf2f4 70%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.35s ease-in-out infinite;
+}
+
+html[data-public-theme="dark"] .skeleton {
+  background: linear-gradient(100deg, #1b303b 30%, #263e49 50%, #1b303b 70%);
+  background-size: 200% 100%;
+}
+
+@keyframes skeleton-shimmer {
+  to { background-position: -200% 0; }
+}
