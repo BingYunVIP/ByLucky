@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-# ByLucky deployment menu for Linux, WSL, or Git Bash.
-# It manages only this repository's Compose PostgreSQL service and local runtime.
+# ByLucky deployment menu for a Linux VPS.
+# It manages this repository's PostgreSQL service and local Node runtime.
 
 set -Eeuo pipefail
 IFS=$'\n\t'
@@ -11,13 +11,14 @@ PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 COMPOSE_FILE="$PROJECT_DIR/docker-compose.dev.yml"
 ENV_FILE="$PROJECT_DIR/.env"
 ENV_EXAMPLE="$PROJECT_DIR/.env.example"
+PASSWORD_HASH_SCRIPT="$PROJECT_DIR/scripts/hash-admin-password-stdin.ts"
 RUNTIME_DIR="$PROJECT_DIR/.bylucky-runtime"
 LOG_DIR="$PROJECT_DIR/logs/production"
 WEB_PID_FILE="$RUNTIME_DIR/web.pid"
 WORKER_PID_FILE="$RUNTIME_DIR/worker.pid"
 WEB_LOG_FILE="$LOG_DIR/web.log"
 WORKER_LOG_FILE="$LOG_DIR/worker.log"
-POSTGRES_PORT="${POSTGRES_PORT:-5433}"
+POSTGRES_PORT="${POSTGRES_PORT:-5431}"
 MANAGED_DATABASE_URL="postgresql://bylucky:bylucky_dev@localhost:${POSTGRES_PORT}/bylucky"
 
 cd "$PROJECT_DIR"
@@ -37,19 +38,8 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
 }
 
-wait_for_docker_engine() {
-  local attempt
-  for attempt in {1..60}; do
-    if docker info >/dev/null 2>&1; then
-      return
-    fi
-    sleep 2
-  done
-  return 1
-}
-
 ensure_docker_engine() {
-  local docker_error docker_context response
+  local docker_error docker_context
   if docker info >/dev/null 2>&1; then
     return
   fi
@@ -57,29 +47,10 @@ ensure_docker_engine() {
   docker_error="$(docker info 2>&1 || true)"
   docker_context="$(docker context show 2>/dev/null || true)"
   if [[ "$docker_error" == *"permission denied"* ]]; then
-    die $'Docker Desktop is running, but Windows denied access to its Docker named pipe.\nQuit Docker Desktop from the system tray, make sure it is not launched as Administrator, then start it again as the current Windows user.\nIf the error remains, restart Windows and verify `docker info` before rerunning deploy.sh.\nCurrent Docker context: '"${docker_context:-unknown}"
+    die $'Docker Engine is running, but this user cannot access it.\nOn Linux, add the deployment user to the docker group (`sudo usermod -aG docker $USER`), sign out and back in, then verify `docker info`.\nDo not run the application as root just to bypass Docker permissions.\nCurrent Docker context: '"${docker_context:-unknown}"
   fi
 
-  case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*)
-      read -r -p "Docker Desktop is not ready. Start it now and wait for the engine? [Y/n] " response
-      response="${response%$'\r'}"
-      case "${response:-Y}" in
-        Y|y|YES|yes)
-          if ! powershell.exe -NoProfile -Command '$app = Join-Path $env:ProgramFiles "Docker\Docker\Docker Desktop.exe"; if (Test-Path -LiteralPath $app) { Start-Process -FilePath $app; exit 0 }; exit 1' >/dev/null 2>&1; then
-            die "Docker Desktop could not be started automatically. Open Docker Desktop, wait for Engine running, run docker info, then rerun deploy.sh."
-          fi
-          say "Waiting up to 120 seconds for Docker Desktop to become ready."
-          wait_for_docker_engine || die "Docker Desktop did not become ready. Open Docker Desktop and resolve its engine status, then verify docker info."
-          return
-          ;;
-        *)
-          ;;
-      esac
-      ;;
-  esac
-
-  die "Docker Desktop engine cannot be reached. Start Docker Desktop, wait for Engine running, then verify docker info before rerunning deploy.sh."
+  die "Docker Engine cannot be reached. Start the docker service (`sudo systemctl start docker`), then verify `docker info` before rerunning deploy.sh."
 }
 
 require_prerequisites() {
@@ -127,6 +98,31 @@ prepare_env_file() {
     cp "$ENV_EXAMPLE" "$ENV_FILE"
     chmod 600 "$ENV_FILE" 2>/dev/null || true
   fi
+  repair_env_file
+}
+
+repair_env_file() {
+  local temporary_file line repaired_count=0
+  [[ -f "$ENV_FILE" ]] || return
+
+  temporary_file="$(mktemp "$PROJECT_DIR/.env.repair.XXXXXX")"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    if [[ -z "$line" || "$line" =~ ^[[:space:]]*# || "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+      printf '%s\n' "$line" >> "$temporary_file"
+    else
+      printf '# Disabled invalid .env line: %s\n' "$line" >> "$temporary_file"
+      ((repaired_count += 1))
+    fi
+  done < "$ENV_FILE"
+
+  if (( repaired_count > 0 )); then
+    mv -- "$temporary_file" "$ENV_FILE"
+    chmod 600 "$ENV_FILE" 2>/dev/null || true
+    say "Disabled $repaired_count non-variable note(s) in .env so Docker Compose can read the file."
+  else
+    rm -f -- "$temporary_file"
+  fi
 }
 
 ensure_managed_database_url() {
@@ -169,7 +165,12 @@ dependencies_are_ready() {
 ensure_dependencies() {
   if dependencies_are_ready; then
     if [[ -f "$PROJECT_DIR/node_modules/.package-lock.json" && "$PROJECT_DIR/package-lock.json" -nt "$PROJECT_DIR/node_modules/.package-lock.json" ]]; then
-      die "package-lock.json is newer than node_modules. Stop local Node/Next processes, run npm ci manually, then run deploy.sh again."
+      say "package-lock.json is newer than node_modules. Refreshing dependencies before deployment."
+      stop_runtime
+      if ! npm ci; then
+        die "Could not install Node dependencies. Stop any remaining ByLucky process and rerun deploy.sh."
+      fi
+      return
     fi
     say "Using the existing Node dependencies."
     return
@@ -177,7 +178,7 @@ ensure_dependencies() {
 
   say "Node dependencies are missing or incomplete. Installing from package-lock.json."
   if ! npm ci; then
-    die "Could not install Node dependencies. On Windows, stop any running ByLucky development server or worker first; native Next.js modules cannot be replaced while they are in use. Then run deploy.sh again."
+    die "Could not install Node dependencies. Stop any remaining ByLucky process and rerun deploy.sh."
   fi
 }
 
@@ -214,11 +215,8 @@ prompt_admin_credentials() {
   done
   unset confirmation
 
-  password_hash="$(printf '%s' "$password" | node --conditions=react-server --import tsx --input-type=module -e '
-    import { readFileSync } from "node:fs";
-    import { hashAdminPassword } from "./src/server/auth/password.ts";
-    process.stdout.write(await hashAdminPassword(readFileSync(0, "utf8")));
-  ')"
+  [[ -f "$PASSWORD_HASH_SCRIPT" ]] || die "Missing $PASSWORD_HASH_SCRIPT"
+  password_hash="$(printf '%s' "$password" | node --conditions=react-server --import tsx "$PASSWORD_HASH_SCRIPT")"
   unset password
   [[ -n "$password_hash" ]] || die "Could not generate the administrator password hash."
 
@@ -284,11 +282,29 @@ stop_runtime() {
   stop_recorded_process "ByLucky worker" "$WORKER_PID_FILE" "dist-worker/index.cjs"
 }
 
+wait_for_web_server() {
+  local attempt
+  for attempt in {1..30}; do
+    if node -e '
+      const net = require("node:net");
+      const socket = net.createConnection({ host: "127.0.0.1", port: 3000 });
+      socket.setTimeout(1000);
+      socket.once("connect", () => { socket.destroy(); process.exit(0); });
+      socket.once("timeout", () => { socket.destroy(); process.exit(1); });
+      socket.once("error", () => process.exit(1));
+    ' >/dev/null 2>&1; then
+      return
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 start_runtime() {
   mkdir -p "$RUNTIME_DIR" "$LOG_DIR"
   stop_runtime
 
-  NODE_ENV=production nohup "$PROJECT_DIR/node_modules/.bin/next" start > "$WEB_LOG_FILE" 2>&1 &
+  NODE_ENV=production PORT=3000 nohup "$PROJECT_DIR/node_modules/.bin/next" start --hostname 127.0.0.1 --port 3000 > "$WEB_LOG_FILE" 2>&1 &
   printf '%s\n' "$!" > "$WEB_PID_FILE"
 
   NODE_ENV=production nohup node --conditions=react-server "$PROJECT_DIR/dist-worker/index.cjs" > "$WORKER_LOG_FILE" 2>&1 &
@@ -300,6 +316,11 @@ start_runtime() {
   worker_pid="$(<"$WORKER_PID_FILE")"
   kill -0 "$web_pid" 2>/dev/null || { tail -n 30 "$WEB_LOG_FILE" >&2 || true; die "The web server did not start."; }
   kill -0 "$worker_pid" 2>/dev/null || { tail -n 30 "$WORKER_LOG_FILE" >&2 || true; die "The worker did not start."; }
+  if ! wait_for_web_server; then
+    tail -n 30 "$WEB_LOG_FILE" >&2 || true
+    stop_runtime
+    die "The web server did not start listening on 127.0.0.1:3000."
+  fi
 
   say "ByLucky is running. Web PID: $web_pid. Worker PID: $worker_pid."
   printf 'Logs: %s\n' "$LOG_DIR"

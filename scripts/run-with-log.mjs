@@ -1,4 +1,4 @@
-import { mkdirSync, createWriteStream } from "node:fs";
+import { mkdirSync, createWriteStream, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
@@ -21,6 +21,7 @@ if (
 const projectDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const logsRoot = resolve(projectDir, "logs");
 const logDir = resolve(logsRoot, scope);
+const runtimeDir = resolve(projectDir, ".bylucky-runtime");
 
 if (!logDir.startsWith(`${logsRoot}${sep}`)) {
   throw new Error("Log destination must remain inside the project logs directory.");
@@ -41,6 +42,40 @@ const child = spawn(command, args, {
   stdio: ["inherit", "pipe", "pipe"],
 });
 
+const developmentStateFile =
+  scope === "development" && (logName === "web" || logName === "worker") && Number.isInteger(child.pid)
+    ? join(runtimeDir, `dev-${logName}.json`)
+    : null;
+
+if (developmentStateFile) {
+  mkdirSync(runtimeDir, { recursive: true });
+  writeFileSync(
+    developmentStateFile,
+    `${JSON.stringify({
+      version: 1,
+      launcherPid: process.pid,
+      childPid: child.pid,
+      startedAtUtc: new Date().toISOString(),
+      scope,
+      logName,
+    })}\n`,
+    "utf8",
+  );
+}
+
+function clearDevelopmentState() {
+  if (!developmentStateFile) return;
+
+  try {
+    const state = JSON.parse(readFileSync(developmentStateFile, "utf8"));
+    if (state.launcherPid === process.pid) {
+      rmSync(developmentStateFile, { force: true });
+    }
+  } catch {
+    // The runtime state is only advisory. A stale file is safe to leave behind.
+  }
+}
+
 child.stdout.pipe(process.stdout);
 child.stdout.pipe(stdoutLog);
 child.stderr.pipe(process.stderr);
@@ -58,6 +93,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 
 child.once("error", (error) => {
   process.stderr.write(`Unable to start ${command}: ${error.message}\n`);
+  clearDevelopmentState();
   stdoutLog.end();
   stderrLog.end();
   process.exitCode = 1;
@@ -65,6 +101,7 @@ child.once("error", (error) => {
 
 child.once("exit", (code, signal) => {
   const footer = `[${new Date().toISOString()}] exited${signal ? ` with ${signal}` : ` with code ${code ?? 1}`}\n`;
+  clearDevelopmentState();
   stdoutLog.end(footer);
   stderrLog.end(footer);
   process.exitCode = code ?? 1;

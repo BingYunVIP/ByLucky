@@ -1,8 +1,8 @@
-# ByLucky Phase 1
+# ByLucky
 
-ByLucky（冰云抽奖）的 V1 基础工程。当前实现严格对应 `ByLucky_V1_PRD.md` 的 Phase 1：Next.js 基础页面、PostgreSQL、完整 Drizzle Schema/Migration、管理员登录与服务端 Session、Worker 进程骨架，以及 Windows 11 开发配置。
+ByLucky（冰云抽奖）V1 是一个面向公开参与和管理员运营的抽奖应用。它包含活动创建、核实兑换码导入、邮箱参与、自动或手动开奖、中奖结果、邮件队列和运维记录；所有业务数据均使用 PostgreSQL 持久化。
 
-活动、奖项、兑换码参与、开奖与邮件业务按 PRD 在后续 Phase 实现。生产 Dockerfile、Caddy 和 Linux VPS Compose 属于 Phase 8，本阶段不提供不可用的占位部署配置。
+Linux VPS 使用 `deploy.sh` 管理宿主机上的 Next.js/Worker 进程和 Compose PostgreSQL；公网 HTTPS 仍应由 VPS 上已有的 Caddy 或 Nginx 反向代理负责。
 
 ## 当前能力
 
@@ -10,12 +10,37 @@ ByLucky（冰云抽奖）的 V1 基础工程。当前实现严格对应 `ByLucky
 - 管理员登录：`/admin/login`
 - 受保护后台：`/admin`
 - 管理员认证 API：登录、登出、Session 查询
-- PostgreSQL 17 开发容器，宿主机默认端口 `5433`
-- PRD 定义的 18 张 Drizzle 数据表和首个 Migration
-- Worker 心跳进程，可写入 `worker_heartbeats`
+- 活动创建、奖项配置、核实兑换码导入和启动
+- 邮箱加兑换码参与，同邮箱多码累计，不同邮箱计入目标人数
+- Worker 自动开奖、手动开奖、指定时间开奖、兑换码清理和中奖记录
+- 公开脱敏中奖展示、后台获奖记录、SMTP 配置、邮件任务队列和运维日志
+- PostgreSQL 17 容器，宿主机默认端口 `5431`（仅绑定 `127.0.0.1`）
+- Drizzle schema、versioned migration 和默认系统设置
+- Worker 心跳和数据库驱动的后台任务处理
 - scrypt 管理员密码、数据库 Session、登录失败限流、同源校验和操作日志
 
-## Windows 11 准备
+## Linux VPS 部署
+
+VPS 需要 Linux、Node.js 22、npm 10+、Docker Engine 和 Docker Compose v2。部署用户应加入 `docker` 用户组，不要用 root 运行整个应用。
+
+```bash
+git clone https://github.com/BingYunVIP/ByLucky.git
+cd ByLucky
+npm ci
+chmod +x deploy.sh
+./deploy.sh
+```
+
+菜单会要求输入管理员账号和密码，并完成以下步骤：
+
+- 创建或修复 `.env`，自动生成缺失的应用密钥。
+- 启动仅绑定 `127.0.0.1:5431` 的 PostgreSQL。
+- 执行 Drizzle migration、Worker 构建和 Next.js production build。
+- 将 Web/Worker 日志写入 `logs/production/`，进程号写入 `.bylucky-runtime/`。
+
+生产域名应由 Caddy/Nginx 代理到 `127.0.0.1:3000`，防火墙只开放 SSH、HTTP 和 HTTPS，不要公开 PostgreSQL 端口。完整 VPS 操作清单见 [VPS_DEPLOYMENT.md](VPS_DEPLOYMENT.md)。
+
+## Windows 11 本地准备
 
 推荐组合是 Windows 11 + Docker Desktop（WSL 2 backend）+ Node.js 22 LTS。项目也支持直接使用 PowerShell 开发，WSL 2 不是强制要求。
 
@@ -98,12 +123,12 @@ Docker Desktop 开启 WSL Integration 后，Ubuntu 内的 `docker compose` 会�
 | `NODE_ENV` | `development`、`test` 或 `production` |
 | `APP_URL` | 浏览器访问的规范 Origin；管理员写请求会据此做同源校验 |
 | `LOG_LEVEL` | `debug`、`info`、`warn` 或 `error` |
-| `DATABASE_URL` | PostgreSQL 连接串；开发默认连接 `localhost:5433` |
+| `DATABASE_URL` | PostgreSQL 连接串；默认连接 `localhost:5431` |
 | `ADMIN_USERNAME` | 唯一管理员账号，不存数据库 |
 | `ADMIN_PASSWORD_HASH` | `npm run admin:hash-password` 生成的 scrypt 哈希，绝不能填写明文密码 |
 | `SESSION_SECRET` | IP 哈希和 Session 相关密钥，至少 32 个随机字节 |
-| `CODE_HMAC_SECRET` | 后续兑换码精确 HMAC 密钥，至少 32 个随机字节 |
-| `CONFIG_ENCRYPTION_KEY` | 后续 SMTP 密码和私密奖品的 AES-256-GCM 密钥 |
+| `CODE_HMAC_SECRET` | 已导入兑换码的精确 HMAC 密钥，至少 32 个随机字节 |
+| `CONFIG_ENCRYPTION_KEY` | SMTP 密码和私密奖品的 AES-256-GCM 密钥 |
 
 `.env` 已被 Git 忽略。不要提交真实密钥。
 
@@ -113,10 +138,10 @@ Docker Desktop 开启 WSL Integration 后，Ubuntu 内的 `docker compose` 会�
 
 开发 Compose 只启动 PostgreSQL，不把 Next.js 或 Worker 放入容器，以便 Windows/WSL 中快速热更新。
 
-本机已有其他 PostgreSQL 使用 `5432` 时，ByLucky 默认使用 `5433`。可临时覆盖宿主端口：
+本机已有其他 PostgreSQL 使用 `5432` 时，ByLucky 默认使用 `5431`。可临时覆盖宿主端口：
 
-```powershell
-$env:POSTGRES_PORT = "55432"
+```bash
+export POSTGRES_PORT=55432
 docker compose -f docker-compose.dev.yml up -d db
 ```
 
@@ -191,8 +216,8 @@ npm run worker:build
 npm run worker:start
 ```
 
-Phase 1 Worker 每 15 秒更新一次 `worker_heartbeats`。定时开奖、系统任务领取和邮件队列将在对应 Phase 接入同一进程，不引入 Redis 或消息队列。
+Worker 每 15 秒更新一次 `worker_heartbeats`，并处理数据库中的定时开奖、核实码清理和邮件任务；不需要 Redis 或额外消息队列。
 
-## 后续生产部署边界
+## 生产边界
 
-PRD Phase 8 将补齐 `Dockerfile`、生产 `docker-compose.yml`、Caddy HTTPS、每日 `pg_dump`、恢复流程和 Linux VPS 上线步骤。在这些文件完成并经过容器验收前，不应把当前开发 Compose 当作生产配置使用。
+当前生产入口是 Linux 主机上的 `deploy.sh` + PostgreSQL Compose 服务。应用进程不放进开发 Compose 容器，便于迁移和日志排查；公网入口必须由 VPS 上的 Caddy/Nginx 提供 HTTPS 和反向代理。上线前请按 [VPS_DEPLOYMENT.md](VPS_DEPLOYMENT.md) 配置备份、进程守护和防火墙。

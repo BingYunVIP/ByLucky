@@ -11,15 +11,18 @@ $ProjectDir = $PSScriptRoot
 $ComposeFile = Join-Path $ProjectDir "docker-compose.dev.yml"
 $EnvFile = Join-Path $ProjectDir ".env"
 $EnvExample = Join-Path $ProjectDir ".env.example"
+$PasswordHashScript = Join-Path $ProjectDir "scripts\hash-admin-password-stdin.ts"
 $RuntimeDir = Join-Path $ProjectDir ".bylucky-runtime"
 $LogDir = Join-Path $ProjectDir "logs\production"
 $WebPidFile = Join-Path $RuntimeDir "web.pid"
 $WorkerPidFile = Join-Path $RuntimeDir "worker.pid"
+$DevelopmentWebStateFile = Join-Path $RuntimeDir "dev-web.json"
+$DevelopmentWorkerStateFile = Join-Path $RuntimeDir "dev-worker.json"
 $WebStdoutLog = Join-Path $LogDir "web.stdout.log"
 $WebStderrLog = Join-Path $LogDir "web.stderr.log"
 $WorkerStdoutLog = Join-Path $LogDir "worker.stdout.log"
 $WorkerStderrLog = Join-Path $LogDir "worker.stderr.log"
-$PostgresPort = if ([string]::IsNullOrWhiteSpace($env:POSTGRES_PORT)) { "5433" } else { $env:POSTGRES_PORT }
+$PostgresPort = if ([string]::IsNullOrWhiteSpace($env:POSTGRES_PORT)) { "5431" } else { $env:POSTGRES_PORT }
 $ManagedDatabaseUrl = "postgresql://bylucky:bylucky_dev@localhost:$PostgresPort/bylucky"
 
 Set-Location -LiteralPath $ProjectDir
@@ -156,15 +159,19 @@ function Assert-Prerequisites {
   Assert-DockerReady
 }
 
+function Get-EnvLines {
+  if (-not (Test-Path -LiteralPath $EnvFile -PathType Leaf)) {
+    return @()
+  }
+
+  return [System.IO.File]::ReadAllLines($EnvFile, [System.Text.UTF8Encoding]::new($false))
+}
+
 function Get-EnvValue {
   param([Parameter(Mandatory = $true)][string]$Key)
 
-  if (-not (Test-Path -LiteralPath $EnvFile -PathType Leaf)) {
-    return $null
-  }
-
   $prefix = "$Key="
-  foreach ($line in Get-Content -LiteralPath $EnvFile) {
+  foreach ($line in Get-EnvLines) {
     if ($line.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
       return $line.Substring($prefix.Length)
     }
@@ -179,11 +186,7 @@ function Set-EnvValue {
     [Parameter(Mandatory = $true)][string]$Value
   )
 
-  $lines = if (Test-Path -LiteralPath $EnvFile -PathType Leaf) {
-    @(Get-Content -LiteralPath $EnvFile)
-  } else {
-    @()
-  }
+  $lines = @(Get-EnvLines)
   $escapedKey = [regex]::Escape($Key)
   $found = $false
   $updatedLines = foreach ($line in $lines) {
@@ -208,6 +211,29 @@ function Set-EnvValue {
 function Ensure-EnvFile {
   if (-not (Test-Path -LiteralPath $EnvFile -PathType Leaf)) {
     Copy-Item -LiteralPath $EnvExample -Destination $EnvFile
+  }
+  Repair-EnvFile
+}
+
+function Repair-EnvFile {
+  if (-not (Test-Path -LiteralPath $EnvFile -PathType Leaf)) {
+    return
+  }
+
+  $repairedCount = 0
+  $updatedLines = foreach ($line in Get-EnvLines) {
+    if ($line -match '^\s*$' -or $line -match '^\s*#' -or $line -match '^[A-Za-z_][A-Za-z0-9_]*=') {
+      $line
+    } else {
+      $repairedCount++
+      "# Disabled invalid .env line: $line"
+    }
+  }
+
+  if ($repairedCount -gt 0) {
+    $content = ([string]::Join([Environment]::NewLine, [string[]]$updatedLines)) + [Environment]::NewLine
+    [System.IO.File]::WriteAllText($EnvFile, $content, [System.Text.UTF8Encoding]::new($false))
+    Write-Host "Disabled $repairedCount non-variable note(s) in .env so Docker Compose can read the file." -ForegroundColor Yellow
   }
 }
 
@@ -296,10 +322,12 @@ function Get-PasswordHash {
   param([Parameter(Mandatory = $true)][string]$PlainText)
 
   $nodePath = (Get-Command node -ErrorAction Stop).Source
-  $nodeCode = "import { readFileSync } from 'node:fs'; import { hashAdminPassword } from './src/server/auth/password.ts'; process.stdout.write(await hashAdminPassword(readFileSync(0, 'utf8')));"
+  if (-not (Test-Path -LiteralPath $PasswordHashScript -PathType Leaf)) {
+    Stop-WithError "Missing password hashing script: $PasswordHashScript"
+  }
   $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
   $startInfo.FileName = $nodePath
-  $startInfo.Arguments = "--conditions=react-server --import tsx --input-type=module -e `"$nodeCode`""
+  $startInfo.Arguments = "--conditions=react-server --import tsx `"$PasswordHashScript`""
   $startInfo.WorkingDirectory = $ProjectDir
   $startInfo.UseShellExecute = $false
   $startInfo.RedirectStandardInput = $true
@@ -318,11 +346,12 @@ function Get-PasswordHash {
   $stderr = $process.StandardError.ReadToEnd()
   $process.WaitForExit()
 
-  if ($process.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($stdout)) {
+  $hash = $stdout.Trim()
+  if ($process.ExitCode -ne 0 -or $hash -notmatch '^scrypt:v1:16384:8:1:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$') {
     Stop-WithError "Unable to generate the administrator password hash. $stderr"
   }
 
-  return $stdout.Trim()
+  return $hash
 }
 
 function Set-AdministratorCredentials {
@@ -448,6 +477,87 @@ function Stop-Runtime {
   Stop-RecordedProcess -Label "ByLucky worker" -PidFile $WorkerPidFile -ExpectedFragment "dist-worker\index.cjs"
 }
 
+function Get-DevelopmentRuntimeState {
+  param([Parameter(Mandatory = $true)][string]$StateFile)
+
+  if (-not (Test-Path -LiteralPath $StateFile -PathType Leaf)) {
+    return $null
+  }
+
+  try {
+    $state = Get-Content -LiteralPath $StateFile -Raw | ConvertFrom-Json -ErrorAction Stop
+    $launcherPid = [int]$state.launcherPid
+    $childPid = [int]$state.childPid
+    $startedAtUtc = [DateTimeOffset]::Parse([string]$state.startedAtUtc, [Globalization.CultureInfo]::InvariantCulture)
+    if ($launcherPid -le 0 -or $childPid -le 0) {
+      throw "Invalid runtime process identifiers."
+    }
+
+    return [PSCustomObject]@{
+      LauncherPid = $launcherPid
+      ChildPid = $childPid
+      StartedAtUtc = $startedAtUtc
+    }
+  } catch {
+    Remove-Item -LiteralPath $StateFile -Force -ErrorAction SilentlyContinue
+    return $null
+  }
+}
+
+function Test-DevelopmentProcessIdentity {
+  param(
+    [Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process,
+    [Parameter(Mandatory = $true)][DateTimeOffset]$StartedAtUtc
+  )
+
+  if ($Process.ProcessName -ine "node") {
+    return $false
+  }
+
+  try {
+    $actualStartedAt = [DateTimeOffset]$Process.StartTime.ToUniversalTime()
+    return [math]::Abs(($actualStartedAt - $StartedAtUtc).TotalMinutes) -le 2
+  } catch {
+    return $false
+  }
+}
+
+function Stop-DevelopmentRuntimeProcess {
+  param(
+    [Parameter(Mandatory = $true)][string]$Label,
+    [Parameter(Mandatory = $true)][string]$StateFile
+  )
+
+  $state = Get-DevelopmentRuntimeState -StateFile $StateFile
+  if ($null -eq $state) {
+    return
+  }
+
+  $processes = @($state.ChildPid, $state.LauncherPid) |
+    ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue } |
+    Where-Object { $null -ne $_ }
+
+  $matchingProcesses = @($processes | Where-Object { Test-DevelopmentProcessIdentity -Process $_ -StartedAtUtc $state.StartedAtUtc })
+  if ($matchingProcesses.Count -eq 0) {
+    Remove-Item -LiteralPath $StateFile -Force -ErrorAction SilentlyContinue
+    return
+  }
+
+  Write-Host "Stopping $Label before production deployment." -ForegroundColor DarkCyan
+  foreach ($process in $matchingProcesses) {
+    Stop-Process -Id $process.Id -ErrorAction SilentlyContinue
+  }
+  foreach ($process in $matchingProcesses) {
+    $process.WaitForExit(10000) | Out-Null
+  }
+  Remove-Item -LiteralPath $StateFile -Force -ErrorAction SilentlyContinue
+}
+
+function Stop-DevelopmentRuntime {
+  Stop-DevelopmentRuntimeProcess -Label "ByLucky development web server" -StateFile $DevelopmentWebStateFile
+  Stop-DevelopmentRuntimeProcess -Label "ByLucky development worker" -StateFile $DevelopmentWorkerStateFile
+}
+
 function Assert-ProductionPortIsAvailable {
   $listeners = @(Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue)
   if ($listeners.Count -gt 0) {
@@ -473,7 +583,9 @@ function Start-ProcessWithProductionEnvironment {
   )
 
   $previousNodeEnvironment = $env:NODE_ENV
+  $previousPort = $env:PORT
   $env:NODE_ENV = "production"
+  $env:PORT = "3000"
   try {
     return Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -WorkingDirectory $ProjectDir -RedirectStandardOutput $StdoutLog -RedirectStandardError $StderrLog -WindowStyle Hidden -PassThru
   } finally {
@@ -482,13 +594,31 @@ function Start-ProcessWithProductionEnvironment {
     } else {
       $env:NODE_ENV = $previousNodeEnvironment
     }
+    if ($null -eq $previousPort) {
+      Remove-Item Env:PORT -ErrorAction SilentlyContinue
+    } else {
+      $env:PORT = $previousPort
+    }
   }
+}
+
+function Wait-ForWebListener {
+  for ($attempt = 1; $attempt -le 15; $attempt++) {
+    $listener = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue
+    if ($listener) {
+      return $true
+    }
+    Start-Sleep -Seconds 1
+  }
+
+  return $false
 }
 
 function Start-Runtime {
   New-Item -ItemType Directory -Path $RuntimeDir -Force | Out-Null
   New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
   Stop-Runtime
+  Stop-DevelopmentRuntime
   Assert-ProductionPortIsAvailable
 
   $nextEntry = Join-Path $ProjectDir "node_modules\next\dist\bin\next"
@@ -518,6 +648,13 @@ function Start-Runtime {
     Show-LogTail -Path $WorkerStderrLog
     Stop-RecordedProcess -Label "ByLucky web server" -PidFile $WebPidFile -ExpectedFragment "node_modules\next\dist\bin\next"
     Stop-WithError "The worker did not start."
+  }
+  if (-not (Wait-ForWebListener)) {
+    Show-LogTail -Path $WebStdoutLog
+    Show-LogTail -Path $WebStderrLog
+    Stop-RecordedProcess -Label "ByLucky worker" -PidFile $WorkerPidFile -ExpectedFragment "dist-worker\index.cjs"
+    Stop-RecordedProcess -Label "ByLucky web server" -PidFile $WebPidFile -ExpectedFragment "node_modules\next\dist\bin\next"
+    Stop-WithError "The web server did not start listening on port 3000."
   }
 
   Write-Section "ByLucky is running. Web PID: $($webProcess.Id). Worker PID: $($workerProcess.Id)."

@@ -9,8 +9,9 @@ services:
       POSTGRES_USER: bylucky
       POSTGRES_PASSWORD: bylucky_dev
       TZ: Asia/Shanghai
+    # Keep PostgreSQL private to the host. The application connects through 127.0.0.1.
     ports:
-      - "${POSTGRES_PORT:-5433}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5431}:5432"
     volumes:
       - bylucky_postgres_data:/var/lib/postgresql/data
     healthcheck:
