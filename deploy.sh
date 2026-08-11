@@ -37,6 +37,51 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
 }
 
+wait_for_docker_engine() {
+  local attempt
+  for attempt in {1..60}; do
+    if docker info >/dev/null 2>&1; then
+      return
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+ensure_docker_engine() {
+  local docker_error docker_context response
+  if docker info >/dev/null 2>&1; then
+    return
+  fi
+
+  docker_error="$(docker info 2>&1 || true)"
+  docker_context="$(docker context show 2>/dev/null || true)"
+  if [[ "$docker_error" == *"permission denied"* ]]; then
+    die $'Docker Desktop is running, but Windows denied access to its Docker named pipe.\nQuit Docker Desktop from the system tray, make sure it is not launched as Administrator, then start it again as the current Windows user.\nIf the error remains, restart Windows and verify `docker info` before rerunning deploy.sh.\nCurrent Docker context: '"${docker_context:-unknown}"
+  fi
+
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      read -r -p "Docker Desktop is not ready. Start it now and wait for the engine? [Y/n] " response
+      response="${response%$'\r'}"
+      case "${response:-Y}" in
+        Y|y|YES|yes)
+          if ! powershell.exe -NoProfile -Command '$app = Join-Path $env:ProgramFiles "Docker\Docker\Docker Desktop.exe"; if (Test-Path -LiteralPath $app) { Start-Process -FilePath $app; exit 0 }; exit 1' >/dev/null 2>&1; then
+            die "Docker Desktop could not be started automatically. Open Docker Desktop, wait for Engine running, run docker info, then rerun deploy.sh."
+          fi
+          say "Waiting up to 120 seconds for Docker Desktop to become ready."
+          wait_for_docker_engine || die "Docker Desktop did not become ready. Open Docker Desktop and resolve its engine status, then verify docker info."
+          return
+          ;;
+        *)
+          ;;
+      esac
+      ;;
+  esac
+
+  die "Docker Desktop engine cannot be reached. Start Docker Desktop, wait for Engine running, then verify docker info before rerunning deploy.sh."
+}
+
 require_prerequisites() {
   [[ -f "$COMPOSE_FILE" ]] || die "Missing $COMPOSE_FILE"
   [[ -f "$ENV_EXAMPLE" ]] || die "Missing $ENV_EXAMPLE"
@@ -53,7 +98,7 @@ require_prerequisites() {
   node_major="$(node -p 'process.versions.node.split(".")[0]')"
   [[ "$node_major" =~ ^[0-9]+$ ]] && (( node_major >= 22 && node_major < 23 )) || die "Node.js 22 is required."
   docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required."
-  docker info >/dev/null 2>&1 || die "Docker is not running or this user cannot access it."
+  ensure_docker_engine
 }
 
 get_env_value() {
